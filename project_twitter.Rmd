@@ -1,0 +1,387 @@
+---
+title: "Text as Data project"
+author: "Yutong Chen"
+output: pdf_document
+---
+
+------
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=TRUE}
+# import libraries
+# import libraries
+libraries <- c("ldatuning", "topicmodels", "ggplot2", "dplyr", "stm","rjson", "quanteda", "quanteda.corpora","lubridate", "parallel", "doParallel", "tidytext", "stringi", "tidyr","text2vec","bursts","readtext","reshape2","pals","Rtsne", "rsvd" , "geometry" ,"lsa","factoextra","quanteda.textmodels","quanteda.textplots","twitteR","syuzhet","RColorBrewer")
+lapply(libraries, require, character.only = TRUE)
+```
+# topic part
+
+## read in trigram data from the file
+```{r echo=TRUE}
+read_grams <- function(text1,text2,text3){
+  files <- list.files(text1)
+  dir <-  paste(text2,files,sep="")    
+  n <- length(dir)
+  date <- as.Date(gsub(text3, "", files ))
+  merge.data <- read.csv(file = dir[1],header=F,col.names = c('gram','counts'))
+  merge.data$date <- date[1]
+  for (i in 2:n){
+     new.data = read.csv(file = dir[i], header=F,col.names = c('gram','counts'))
+     new.data$date <- date[i]
+     merge.data = rbind(merge.data,new.data)
+  }
+return(merge.data)
+}
+bigrams.data <- read_grams('bigrams',"./bigrams/","_top1000bigrams.csv")
+grams.data <- read_grams('grams',"./grams/","_top1000terms.csv")
+trigrams.data <- read_grams('trigrams',"./trigrams/","_top1000trigrams.csv")
+```
+
+## top grams changing over time
+```{r echo=TRUE}
+require(ggplot2,scales,ggpmisc)
+
+plot_gram_change<- function(data,g){
+  temp.data <- data[which(data$gram ==g),]
+  theme_set(theme_bw()) # Change the theme to my preference
+  my.formula <- y ~ x
+  ggplot(aes(x = date, y = counts), data = temp.data) + geom_point()+ geom_smooth(method = "lm", se=FALSE, color="black", formula =   my.formula) +
+   ggpmisc::stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                parse = TRUE)+scale_y_continuous(labels = scales::comma)+ labs(title = paste("Frequency trend for",g))
+}
+# coronavirus
+
+plot_gram_change(grams.data,'coronavirus')
+plot_gram_change(grams.data,'covid19')
+plot_gram_change(grams.data,'wuhanvirus')
+plot_gram_change(grams.data,'china')
+plot_gram_change(grams.data,'lockdown')
+plot_gram_change(grams.data,'quarantine')
+plot_gram_change(grams.data,'wearamask')
+plot_gram_change(grams.data,'covid')
+plot_gram_change(grams.data,'vaccine')
+
+
+```
+## wordcloud
+```{r echo=TRUE}
+wc_date <- function(data,date,max) {
+  temp <- data[which(data$date == date),]
+  dev.new(width=100, height=80)
+wordcloud::wordcloud(words=temp$gram,freq=temp$counts,max.words=max,random.order=FALSE, rot.per=0.35,colors=brewer.pal(8, "Dark2"))
+}
+
+wc_date(bigrams.data,'2021-05-05',300)
+
+bigrams.data[which(bigrams.data$date == date),]
+
+
+```
+
+
+```{r echo=TRUE}
+merge.data$date =
+
+
+```
+# Vaccine part
+
+```{r echo=TRUE}
+
+# Load data
+vaccination_tweets <- read.csv("vaccination_all_tweets.csv", stringsAsFactors = F,encoding = 'UTF-8')
+
+# Create date vectors
+class(vaccination_tweets$date)
+vaccination_tweets$date2 <- as.Date(vaccination_tweets$date)
+vaccination_tweets$month <- month(vaccination_tweets$date2)
+
+
+# Remove non ASCII characters
+vaccination_tweets$text <- stringi::stri_trans_general(vaccination_tweets$text, "latin-ascii")
+
+# Removes solitary letters
+vaccination_tweets$text <- gsub(" [A-z] ", " ", vaccination_tweets$text)
+
+# As always we begin with a DFM.
+# Create DFM
+vaccination_dfm <-dfm(vaccination_tweets$text, stem = F, remove_punct = TRUE, tolower = T, remove_numbers = TRUE, remove = c(stopwords("english"), "http","https","rt", "t.co"))
+```
+
+Your written answer goes here.
+
+## most common hashtags
+
+```{r echo=TRUE}
+tag_dfm <- dfm_select(vaccination_dfm, pattern = "#*")
+toptag <- names(topfeatures(tag_dfm, 150))
+toptag[1:20]
+```
+## Sentiment analysis
+```{r echo=TRUE}
+vaccination_tweets$sentiment_nrc <- get_nrc_sentiment(vaccination_tweets$text) 
+vaccination_tweets$sentiment <- get_sentiment(vaccination_tweets$text) 
+unique(vaccination_tweets$hashtags)
+vaccination_tweets$hashtags
+vaccination_tweets$sentiment_nrc
+```
+
+
+## Group by time
+```{r echo=TRUE}
+
+emotion_date <- vaccination_tweets %>%
+  group_by(date2) %>%
+  summarise(
+            anger = sum(ifelse(sentiment_nrc$anger>0,1,0)),
+            anticipation = sum(ifelse(sentiment_nrc$anticipation>0,1,0)),
+            disgust = sum(ifelse(sentiment_nrc$disgust>0,1,0)),
+            fear = sum(ifelse(sentiment_nrc$fear>0,1,0)),
+            joy = sum(ifelse(sentiment_nrc$joy>0,1,0)),
+            sadness = sum(ifelse(sentiment_nrc$sadness>0,1,0)),
+            surprise = sum(ifelse(sentiment_nrc$surprise>0,1,0)),
+            trust = sum(ifelse(sentiment_nrc$trust>0,1,0)),
+            negative = sum(ifelse(sentiment_nrc$negative>0,1,0)),
+            positive = sum(ifelse(sentiment_nrc$positive>0,1,0)))
+
+vizDataFrame <- melt(emotion_date, id.vars = "date2")
+
+# plot topic proportions per month as bar plot
+library(RColorBrewer)
+ggplot(vizDataFrame, aes(x=date2, y=value, fill=variable)) + 
+  geom_area(stat = "identity") + ylab("proportion") + 
+  scale_fill_manual(values = colorRampPalette(brewer.pal(12, "Accent"))(10), name = "date") + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+```{r echo=TRUE}
+
+emotion_month <- vaccination_tweets %>%
+  group_by(month) %>%
+  summarise(
+            anger = sum(ifelse(sentiment_nrc$anger>0,1,0)),
+            anticipation = sum(ifelse(sentiment_nrc$anticipation>0,1,0)),
+            disgust = sum(ifelse(sentiment_nrc$disgust>0,1,0)),
+            fear = sum(ifelse(sentiment_nrc$fear>0,1,0)),
+            joy = sum(ifelse(sentiment_nrc$joy>0,1,0)),
+            sadness = sum(ifelse(sentiment_nrc$sadness>0,1,0)),
+            surprise = sum(ifelse(sentiment_nrc$surprise>0,1,0)),
+            trust = sum(ifelse(sentiment_nrc$trust>0,1,0)),
+            negative = sum(ifelse(sentiment_nrc$negative>0,1,0)),
+            positive = sum(ifelse(sentiment_nrc$positive>0,1,0)))
+
+vizDataFrame <- melt(emotion_month, id.vars = "month")
+emotion_month
+# plot topic proportions per month as bar plot
+library(RColorBrewer)
+ggplot(vizDataFrame, aes(x=month, y=value, fill=variable)) + 
+  geom_bar(stat = "identity") + ylab("proportion") + 
+  scale_fill_manual(values = colorRampPalette(brewer.pal(12, "Accent"))(10), name = "month") + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+## sentiment - 3
+```{r echo=TRUE}
+emotion_np <- vaccination_tweets %>%
+  group_by(date2) %>%
+  summarise(neutral = sum(ifelse(sentiment==0,1,0)),
+            negative = sum(ifelse(sentiment<0,1,0)),
+            positive = sum(ifelse(sentiment>0,1,0)))
+emotion_np_month <- vaccination_tweets %>%
+  group_by(month) %>%
+  summarise(neutral = sum(ifelse(sentiment==0,1,0)),
+            negative = sum(ifelse(sentiment<0,1,0)),
+            positive = sum(ifelse(sentiment>0,1,0)))
+
+emotion_np_month
+vizDataFrame <- melt(emotion_np, id.vars = "date2")
+
+# plot topic proportions per month as bar plot
+
+ggplot(vizDataFrame, aes(x=date2, y=value, fill=variable)) + 
+  geom_line(stat = "identity") + ylab("proportion") + 
+  scale_fill_manual(values = alpha(c('#6495ED','#FFA500','#FF4500'),0.5), name = "sentiment") + 
+  theme_set(theme_bw()) 
+
+```
+
+## Group by hashtag
+```{r echo=TRUE}
+
+ # Load data
+vaccination_tweets_pre <- read.csv("vaccinationtweets.csv", stringsAsFactors = F,encoding = 'UTF-8')
+
+
+vaccination_tweets_pre$date2 <- as.Date(mdy_hm(vaccination_tweets_pre$date))
+
+
+vaccination_tweets_pre$sentiment_nrc <- get_nrc_sentiment(vaccination_tweets_pre$text) 
+vaccination_tweets_pre$sentiment <- get_sentiment(vaccination_tweets_pre$text) 
+
+
+emotion_hashtag <- vaccination_tweets_pre %>%
+  group_by(hashtags) %>%
+  summarise(
+            anger = sum(ifelse(sentiment_nrc$anger>0,1,0)),
+            anticipation = sum(ifelse(sentiment_nrc$anticipation>0,1,0)),
+            disgust = sum(ifelse(sentiment_nrc$disgust>0,1,0)),
+            fear = sum(ifelse(sentiment_nrc$fear>0,1,0)),
+            joy = sum(ifelse(sentiment_nrc$joy>0,1,0)),
+            sadness = sum(ifelse(sentiment_nrc$sadness>0,1,0)),
+            surprise = sum(ifelse(sentiment_nrc$surprise>0,1,0)),
+            trust = sum(ifelse(sentiment_nrc$trust>0,1,0)),
+            negative = sum(ifelse(sentiment_nrc$negative>0,1,0)),
+            positive = sum(ifelse(sentiment_nrc$positive>0,1,0)))
+
+vizDataFrame <- melt(emotion_hashtag, id.vars = "hashtags")
+emotion_hashtag
+# plot topic proportions per month as bar plot
+
+ggplot(vizDataFrame, aes(x=hashtags, y=value, fill=variable)) + 
+  geom_bar(stat = "identity") + ylab("proportion") + 
+  scale_fill_manual(values = paste0(alphabet(20), "FF"), name = "hashtags") + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+-------------------------------------------------------------------------------
+emotion_np <- vaccination_tweets_pre %>%
+  group_by(hashtags) %>%
+  summarise(neutral = sum(ifelse(sentiment==0,1,0)),
+            negative = sum(ifelse(sentiment<0,1,0)),
+            positive = sum(ifelse(sentiment>0,1,0)))
+
+emotion_np
+/rowSums(emotion_np)
+
+rowSums(emotion_np)
+vizDataFrame <- melt(emotion_np, id.vars = "hashtags")
+vizDataFrame
+# plot topic proportions per month as bar plot
+
+ggplot(vizDataFrame, aes(x=hashtags, y=value, fill=variable)) + 
+  geom_bar(stat = "identity") + ylab("proportion") + 
+  scale_fill_manual(values = alpha(c('#6495ED','#FFA500','#FF4500'),0.5), name = "sentiment") + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+## topic model cutoff data\\
+
+```{r echo=TRUE}
+
+# get subset
+first_vaccination_tweets <- vaccination_tweets[which(vaccination_tweets$date2 <= '2021-01-31'),]
+second_vaccination_tweets <- vaccination_tweets[which(vaccination_tweets$date2 > '2021-01-31' &vaccination_tweets$date2 <= '2021-02-28'),]
+third_vaccination_tweets <- vaccination_tweets[which(vaccination_tweets$date2 > '2021-02-28'),]
+```
+
+```{r echo=TRUE}
+
+# fit topic model to each
+
+# Remove non ASCII characters
+first_vaccination_tweets$text <- stringi::stri_trans_general(first_vaccination_tweets$text, "latin-ascii")
+
+# Removes solitary letters
+first_vaccination_tweets$text <- gsub(" [A-z] ", " ", first_vaccination_tweets$text)
+
+# As always we begin with a DFM.
+# Create DFM
+first_vaccination_dfm <-dfm(first_vaccination_tweets$text, stem = F, remove_punct = TRUE, tolower = T, remove_numbers = TRUE, remove = c(stopwords("english"), "http","https","rt", "t.co"))
+
+
+# Set number of topics
+k <- 16
+# Fit the topic model 
+system.time(
+  first_vaccination_tm <- LDA(first_vaccination_dfm, chunksize = 50000,k = k, n_iter = 3000, method = "Gibbs",  control = list(seed = 1234)))
+# get words for each topic
+
+data.frame(terms(first_vaccination_tm,10))
+data.frame(sort(table(topics(first_vaccination_tm,2)),decreasing = TRUE))
+
+
+```
+
+```{r echo=TRUE}
+
+# fit topic model to each
+
+# Remove non ASCII characters
+second_vaccination_tweets$text <- stringi::stri_trans_general(second_vaccination_tweets$text, "latin-ascii")
+
+# Removes solitary letters
+second_vaccination_tweets$text <- gsub(" [A-z] ", " ", second_vaccination_tweets$text)
+
+# As always we begin with a DFM.
+# Create DFM
+second_vaccination_dfm <-dfm(second_vaccination_tweets$text, stem = F, remove_punct = TRUE, tolower = T, remove_numbers = TRUE, remove = c(stopwords("english"), "http","https","rt", "t.co"))
+
+
+# Set number of topics
+k <- 16
+# Fit the topic model 
+system.time(
+  second_vaccination_tm <- LDA(second_vaccination_dfm, k = k, n_iter = 3000, method = "Gibbs", chunk_size = 50000, control = list(seed = 1234)))
+# get words for each topic
+data.frame(terms(second_vaccination_tm,20))
+data.frame(sort(table(topics(second_vaccination_tm,2)),decreasing = TRUE))
+
+```
+```{r echo=TRUE}
+
+# fit topic model to each
+
+# Remove non ASCII characters
+third_vaccination_tweets$text <- stringi::stri_trans_general(third_vaccination_tweets$text, "latin-ascii")
+
+# Removes solitary letters
+third_vaccination_tweets$text <- gsub(" [A-z] ", " ", third_vaccination_tweets$text)
+
+# As always we begin with a DFM.
+# Create DFM
+third_vaccination_dfm <-dfm(third_vaccination_tweets$text, stem = F, remove_punct = TRUE, tolower = T, remove_numbers = TRUE, remove = c(stopwords("english"), "http","https","rt", "t.co"))
+
+
+# Set number of topics
+k <- 16
+# Fit the topic model 
+system.time(
+  third_vaccination_tm <- LDA(third_vaccination_dfm, k = k, n_iter = 3000, method = "Gibbs", chunk_size = 50000, control = list(seed = 1234)))
+# get words for each topic
+data.frame(terms(third_vaccination_tm,20))
+data.frame(sort(table(topics(third_vaccination_tm,2)),decreasing = TRUE))
+```
+
+
+
+```{r echo=TRUE}
+
+```
+
+
+```{r echo=TRUE}
+summary <- vaccination_tweets %>%
+  group_by(date2) %>%
+  summarise(
+            mean = round(mean(sentiment), 2),
+            num_tweets = n())
+
+summary %>%
+  ggplot(aes(date2, mean)) +
+    geom_line(size = 1) + 
+    scale_x_continuous(name = "\nTime", breaks = NULL) +
+    scale_y_continuous(name = "Sentiment\n") 
+
+
+
+```
+
+

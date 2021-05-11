@@ -1,0 +1,548 @@
+---
+title: "Text as Data HW 3"
+author: "Yutong Chen, yc4127"
+date: "4/21/2020"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+------
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r echo=TRUE}
+# import libraries
+libraries <- c("ldatuning", "topicmodels", "ggplot2", "dplyr", "stm","rjson", "quanteda", "quanteda.corpora","lubridate", "parallel", "doParallel", "tidytext", "stringi", "tidyr","text2vec","bursts","readtext","reshape2","pals","Rtsne", "rsvd" , "geometry" ,"lsa","factoextra","quanteda.textmodels","quanteda.textplots")
+lapply(libraries, require, character.only = TRUE)
+```
+## Q1 Vaccination tweets
+
+## Q1a Create subset
+
+```{r echo=TRUE}
+# Load data
+vaccination_tweets <- read.csv("vaccinationtweets.csv", stringsAsFactors = F,encoding = 'UTF-8')
+
+# Create date vectors
+
+vaccination_tweets$date2 <- as.Date(mdy_hm(vaccination_tweets$date))
+
+# get subset
+vaccination_tweets <- vaccination_tweets[which(vaccination_tweets$date2 <= '2021-04-30' & vaccination_tweets$date2 >= '2021-01-01'),]
+
+# Collapse tweets so we are looking at the total tweets at the day level
+vaccination_tweets_sum <- vaccination_tweets %>% group_by(date2) %>% summarise(text = paste(text, collapse = " "))
+
+# Table that shows how many documents are associated with each month
+count(vaccination_tweets_sum,month(vaccination_tweets_sum$date2))
+
+```
+
+
+## Q1b Remove ASCII characters
+
+```{r echo=TRUE}
+# Remove non ASCII characters
+vaccination_tweets_sum$text <- stringi::stri_trans_general(vaccination_tweets_sum$text, "latin-ascii")
+
+# Removes solitary letters
+vaccination_tweets_sum$text <- gsub(" [A-z] ", " ", vaccination_tweets_sum$text)
+
+# As always we begin with a DFM.
+# Create DFM
+vaccination_dfm <-dfm(vaccination_tweets_sum$text, stem = F, remove_punct = TRUE, tolower = T, remove_numbers = TRUE, remove = c(stopwords("english"), "http","https","rt", "t.co"))
+# Report features and num of documents:
+cat('Number of documents:',nrow(vaccination_dfm),'Number of features:',ncol(vaccination_dfm))
+```
+
+
+
+## Q1c Argument for removing rare terms from a dfm
+
+Answer: In practical cases, very rare tokens are usually removed during preprocessing. This is reasonable because rare terms appears only a few times, making it more likely to be interpreted with higher bias. Also, results obtained with rare terms is not robust.
+
+## Q1d Fit topic model with 20 topics using LDA()
+```{r echo=TRUE}
+# Set number of topics
+k <- 20
+# Fit the topic model 
+system.time(
+  vaccination_tm <- LDA(vaccination_dfm, k = k, n_iter = 3000, method = "Gibbs",  control = list(seed = 1234)))
+
+# Report @loglikelihhod
+vaccination_tm@loglikelihood
+
+```
+
+
+## Q1e top 10 words and most frequent topics
+
+```{r echo=TRUE}
+# top 10 words
+top_term <- data.frame(terms(vaccination_tm,10))
+most_topics <- topics(vaccination_tm,2)
+topic_frequency <-data.frame(sort(table(most_topics),decreasing = TRUE))
+topic_frequency
+```
+
+## Q1f Top 5 topics and their labels
+
+```{r echo=TRUE}
+topic_frequency$most_topics[c(1:5)]
+class(topic_frequency$most_topics)
+toptopics <- as.vector(topic_frequency$most_topics[c(1:5)]) %>% as.numeric()
+toptopics
+toptopicLabels<-
+  apply(top_term[1:3,toptopics], 2, paste, collapse=" ")
+top_term[toptopics]
+class(toptopicLabels)
+```
+
+Answer: for labels of most frequent topics I choose the top three terms of each topics.
+
+## Q1g mean topic contribution across months
+
+```{r echo=TRUE}
+
+# get model results
+
+tmResult <- posterior(vaccination_tm)
+theta <- tmResult$topics
+beta <- tmResult$terms
+N <- 95
+
+# append month information for aggregation
+vaccination_tweets_sum$month <- month(vaccination_tweets_sum$date2)
+
+# get mean topic proportions per month
+topic_proportion_per_month <- aggregate(theta, by = list(month = vaccination_tweets_sum$month), mean)
+
+topic_proportion_per_month
+
+# topic proportions for the named topics
+top_topic_proportion_per_month<-topic_proportion_per_month[c(1,toptopics)]
+colnames(top_topic_proportion_per_month)[2:(length(toptopics)+1)] <- toptopicLabels
+
+vizDataFrame <- melt(top_topic_proportion_per_month, id.vars = "month")
+
+# plot topic proportions per month as bar plot
+
+ggplot(vizDataFrame, aes(x=month, y=value, fill=variable)) + 
+  geom_bar(stat = "identity") + ylab("proportion") + 
+  scale_fill_manual(values = paste0(alphabet(20), "FF"), name = "month") + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+## Q1h  re-run model with k=5 and k=100
+
+```{r echo=TRUE}
+# perplexity of k=20
+vaccination_dtm<- convert(vaccination_dfm, to="topicmodels")
+perplexity_20 <-topicmodels::perplexity(vaccination_tm,newdata = vaccination_dtm)
+
+
+# Set number of topics as 5
+k2 <- 5
+# Fit the topic model 
+system.time(
+  vaccination_tm2 <- LDA(vaccination_dfm, k = k2, n_iter = 3000, method = "Gibbs",  control = list(seed = 1234)))
+
+# Report perplexity
+
+perplexity_5 <- topicmodels::perplexity(vaccination_tm2,vaccination_dtm)
+
+# Set number of topics as 100
+k3 <- 100
+# Fit the topic model 
+system.time(
+  vaccination_tm3 <- LDA(vaccination_dfm, k = k3, n_iter = 3000, method = "Gibbs",  control = list(seed = 1234)))
+
+# Report perplexity
+perplexity_100 <- topicmodels::perplexity(vaccination_tm3,vaccination_dtm)
+
+
+cat('Perplexity of model with k=5',perplexity_5 ,'Perplexity of model with k=20',perplexity_20, 'Perplexity of model with k=100',perplexity_100)
+```
+
+Answer: Since a lower perplexity indicates a better model, it seems that our model with k=20 gives the best result.
+
+
+## Q2  Topic Stability
+
+## Q2a re-run with different seed 
+
+```{r echo=TRUE}
+
+system.time(
+  vaccination_tm_seed2 <- LDA(vaccination_dfm, k = k, n_iter = 3000, method = "Gibbs",  control = list(seed = 5555)))
+vaccination_tm@loglikelihood
+vaccination_tm_seed2@loglikelihood
+  
+```
+## Q2b closest topic
+
+```{r echo=TRUE}
+# get model results
+
+tmResult2 <- posterior(vaccination_tm_seed2)
+theta2 <- tmResult2$topics
+beta2 <- tmResult2$terms
+vaccination_topics <- tidy(vaccination_tm, matrix = "beta") 
+vaccination_topics <- vaccination_topics %>% pivot_wider(id_cols = "topic",names_from = "term",values_from ="beta",names_repair="minimal")
+
+vaccination_topics_seed2 <- tidy(vaccination_tm_seed2, matrix = "beta") 
+vaccination_topics_seed2 <- vaccination_topics_seed2 %>% pivot_wider(id_cols = "topic",names_from = "term",values_from ="beta",names_repair="minimal")
+
+
+# cosine_smilarity
+calculate_cosine_similarity <- function(vec1, vec2) { 
+  nominator <- vec1 %*% vec2  
+  denominator <- sqrt(vec1 %*% vec1)*sqrt(vec2 %*% vec2)
+  return(nominator/denominator)
+}
+
+sim <- c()
+for(i in 1:nrow(vaccination_topics)) {      
+  sim<-c(sim,calculate_cosine_similarity(as.vector(t(vaccination_topics[i,])),
+   as.vector(t(vaccination_topics_seed2[i,]))))
+}
+?data.frame
+result_score <- data.frame(topics = vaccination_topics$topic,cosine_similarity=sim) 
+result_score<-result_score[order(result_score$cosine_similarity,decreasing=T),]
+result_score
+```
+Answer: The most similar topics are topic 12 and 14.
+
+## Q2c number of top 10 words shared
+
+```{r echo=TRUE}
+
+top_term_seed2 <- data.frame(terms(vaccination_tm_seed2,10))
+
+cnt <- c()
+for(i in 1:ncol(top_term)) {      
+  c <- 0 
+  for (j in top_term[,i]){
+    if (j %in% top_term_seed2[,i]){
+     c<-c+1 
+    }
+  }
+  cnt<-c(cnt,c)
+}
+result_cnt <- data.frame(topics = vaccination_topics$topic,wordcount=cnt) 
+result_cnt<-result_cnt[order(result_cnt$wordcount,decreasing=T),]
+result_cnt
+```
+Answer: the topic with most words shared is 12.
+
+## Q2d model with 3 topics
+
+```{r echo=TRUE}
+
+# Fit the topic model 
+system.time(
+  vaccination_tm3_seed1 <- LDA(vaccination_dfm, k = 3, n_iter = 3000, method = "Gibbs",  control = list(seed = 1234)))
+
+system.time(
+  vaccination_tm3_seed2 <- LDA(vaccination_dfm, k = 3, n_iter = 3000, method = "Gibbs",  control = list(seed = 5555 )))
+
+# get model results
+top_term_3_seed1 <- data.frame(terms(vaccination_tm3_seed1,10))
+top_term_3_seed2 <- data.frame(terms(vaccination_tm3_seed2,10))
+top_term_3_seed1
+# get common words table
+cnt <- c()
+for(i in 1:ncol(top_term_3_seed1)) {      
+  c <- 0 
+  for (j in top_term_3_seed1[,i]){
+    if (j %in% top_term_3_seed2[,i]){
+     c<-c+1 
+    }
+  }
+  cnt<-c(cnt,c)
+}
+cnt
+top_term_3_seed1$topic
+result_cnt <- data.frame(topics = vaccination_topics$topic[1:3],wordcount=cnt) 
+result_cnt<-result_cnt[order(result_cnt$wordcount,decreasing=T),]
+result_cnt
+
+```
+Answer: Model with 3 topics is more stable. All three topics have shared top words.
+
+## Q3 Topic models with covariates
+
+```{r echo=TRUE}
+
+hashtag_vaccination_tweet <- vaccination_tweets[which(vaccination_tweets$hashtags %in% c('PfizerBioNTech','Covaxin')),]
+
+hashtag_vaccination_tweet %>% group_by(hashtags) %>% count()
+
+```
+## Q3a preprocessing 
+
+```{r echo=TRUE}
+# create binary variable where 1:pfizerbiontech and 0 for covaxin
+hashtag_vaccination_tweet$vaccine <- ifelse(hashtag_vaccination_tweet$hashtags=='PfizerBioNTech',1,0)
+
+# remove non ascII
+hashtag_vaccination_tweet$text <- stringi::stri_trans_general(hashtag_vaccination_tweet$text, "latin-ascii")
+
+# Removes solitary letters
+hashtag_vaccination_tweet$text <- gsub(" [A-z] ", " ", hashtag_vaccination_tweet$text)
+
+# Other preprocessing
+hashtag_vaccine_data <- textProcessor(
+  hashtag_vaccination_tweet$text,
+  lowercase = TRUE,
+  removestopwords = TRUE,
+  removenumbers = TRUE,
+  removepunctuation = TRUE,
+  stem = FALSE
+) 
+
+hashtag_vaccine_data<-
+prepDocuments(hashtag_vaccine_data$documents, hashtag_vaccine_data$vocab,meta = hashtag_vaccination_tweet,
+  lower.thresh = 10
+)
+
+hashtag_vaccine_data$meta$date2 <- as.numeric(hashtag_vaccine_data$meta$date2)
+```
+Answer: In preprocessing, I implemented similar preprocessing as in part1 with a lower threshold of 10 as advised. 
+
+## Q3b fit STM model
+
+```{r echo=TRUE}
+system.time(
+vaccine_stm <- stm(documents = hashtag_vaccine_data$documents,vocab = hashtag_vaccine_data$vocab,prevalence = ~vaccine + s(date2), data = hashtag_vaccine_data$meta,K=0,seed = 1234 ,init.type = "Spectral", verbose = FALSE, reportevery = 50))
+
+cat('Num of topic chosen is:', ncol(vaccine_stm$theta),'Num of iteration to converge is:',vaccine_stm$convergence$its)
+```
+
+Answer: For lower threshold = 10, the program took 110 iterations to converge, and the number of topic chosen is 50.
+
+   user  system elapsed 
+1247.22   13.92 1279.08 
+
+## Q3c topics that occur in the highest proportion
+
+```{r echo=TRUE}
+plot(vaccine_stm, type = "summary",n=4,ylim=c(45,50) )
+```
+## Q3d topic 29 vaccine, number, msnbc, covid
+
+```{r echo=TRUE}
+
+# A spline of degree D is a function formed by connecting polynomial segments of degree D
+
+prep <- estimateEffect(1:50  ~vaccine + s(date2) , vaccine_stm, meta = hashtag_vaccine_data$meta)
+
+# content variation with vaccines
+plot(prep, "vaccine", model =vaccine_stm,topics = c(29),
+     method = "difference", cov.value1 = "Covaxin", cov.value2 = "PfizerBioNTech")
+
+# Plots the distribution of topics over time
+plot(prep, "date2", vaccine_stm, topics = c(29), 
+     method = "continuous", xaxt = "n", xlab = "Date")
+
+```
+Answer: we choose topic 29 to discuss, words for topic 29 are vaccine, number, msnbc, covid. We see that the covariate level of covaxin compared to pfizerbiontech is -0.0202, and the prevalence of topic 29 tend to decrease overtime.
+
+## Q4 Non-parametric scaling - wordfish
+## Q4a subset of manifestos
+
+
+```{r echo=TRUE}
+manifestos <-data_corpus_ukmanifestos
+manifestos <- corpus_subset(manifestos, (Party == "Con" | Party == 'Lab'))
+head(docvars(manifestos))
+
+```
+## Q4b set dir for wordfish
+
+```{r echo=TRUE}
+# construct dfm
+lab_con_dfm <- dfm(texts(manifestos), 
+                   stem = T, 
+                   remove = stopwords("english"), 
+                   remove_punct = T
+)
+# get index
+lab_con_dfm@Dimnames$docs <- paste(manifestos$Party, manifestos$Year, sep = "_")
+
+# set identification
+dir = c(which(lab_con_dfm@Dimnames$docs=='Lab_1979'),which(lab_con_dfm@Dimnames$docs=='Con_1979'))
+```
+
+## Q4c fit wordfish and interpret
+
+```{r echo=TRUE}
+# Setting the index on parties (1st Con, 1st Lab)
+manifestos_fish <- textmodel_wordfish(lab_con_dfm, dir)
+summary(manifestos_fish)
+# visualize one-dimensional scaling
+textplot_scale1d(manifestos_fish)
+textplot_scale1d(manifestos_fish, groups = manifestos$Party)
+
+```
+Answer: The most left-wing(conservative) document is 2005-Con, the most right-wing(labor document) is 1951-Con. The result for left-wing is not surprising, but the result for right-wing is surprising, because for the top 2 most right-wing manifesto we get conservative party's speech. However, from the history we get that 1951 is the year conservative party returned to power after dominance by labor party, so it makes sense that the conservative speech at that time was affected by the political environment.
+
+
+## Q4d Guitar plot
+
+```{r echo=TRUE}
+# most important features--word fixed effects
+words <- manifestos_fish$psi # values
+names(words) <- manifestos_fish$features # the words
+
+
+# Guitar plot
+textplot_scale1d(manifestos_fish, margin = "features", 
+                 highlighted = names(words)[1:10])
+```
+Answer: 
+
+## Q5 Bursts
+
+```{r echo=TRUE}
+bursty <- function(word, DTM, date) {
+  word.vec <- DTM[, which(colnames(DTM) == word)]
+  if(length(word.vec) == 0) {
+    print(paste(word, " does not exist in this corpus."))
+    return()
+  } 
+  else {
+    word.times <- c(0,which(as.vector(word.vec)>0))
+    
+    kl <- kleinberg(word.times, gamma = 0.5)
+    kl$start <- date[kl$start+1]
+    kl$end <- date[kl$end]
+    max_level <- max(kl$level)
+    
+    plot(c(kl$start[1], kl$end[1]), c(1,max_level),
+         type = "n", xlab = "Time", ylab = "Level", bty = "n",
+         xlim = c(min(date), max(date)), ylim = c(1, max_level),
+         yaxt = "n")
+    axis(2, at = 1:max_level)
+    
+    for (i in 1:nrow(kl)) {
+      if (kl$start[i] != kl$end[i]) {
+        arrows(kl$start[i], kl$level[i], kl$end[i], kl$level[i], code = 3, angle = 90,
+               length = 0.05)
+      } 
+      else {
+        points(kl$start[i], kl$level[i])
+      }
+    }
+    
+    print(kl)
+  }
+  #note deviation from standard defaults bec don't have that much data
+}
+
+```
+## Q5 Implement bursts
+
+```{r echo=TRUE}
+news_data <- readRDS("news_data.rds")
+news_dfm <- dfm(news_data$headline)
+news_data$date<-as.numeric(factor(news_data$date))
+
+bursty("syria", news_dfm, news_data$date)
+
+bursty("obama", news_dfm, news_data$date)
+
+bursty("china",news_dfm, news_data$date)
+
+```
+
+Answer: The time period is from 2012-01 to 2018-05.
+The burst plot indicate that:
+1. For Syria, there are two bursts around time 1800 and 2300, which is 2017-2018 when US initiated attack on Syria.
+2. For Obama, there are multiple short bursts during time 1000~1500, and slightly over time 1500. Which was 2015~2016 when Obama is about to end his second term.
+3. For china, there are two bursts during 1500 to 2000, around 1750 and 2000. Probably because that's when The fifth Amendment of Constitution of the People's Republic of China was proposed and published. One of the amendment was removing term limits for the chairman and vice-chairman of the country.
+
+
+## Q6 Dimension Reduction and Semantics
+```{r echo=TRUE}
+politics <- news_data[news_data$category == "POLITICS",][1:1000,]
+
+```
+## Q6a PCA
+
+```{r echo=TRUE}
+politics_dfm <- dfm(politics$headline, 
+                remove_punct = T, 
+                tolower = T,
+                remove = stopwords("english")
+)
+
+
+politics_mat <- convert(politics_dfm, to = "matrix") # convert to matrix
+
+# run pca
+politics_pca <- prcomp(politics_mat, center = TRUE, scale = TRUE)
+
+# top loadings on PC1
+# token loadings
+N <- 10
+pc_loadings <- politics_pca$rotation
+pc1_loading <- tibble(token = rownames(pc_loadings), loading = as.vector(pc_loadings[,1])) %>% arrange(-loading)
+pc1_loading$loading <- scale(pc1_loading$loading, center = TRUE)
+pc1_loading <- rbind(top_n(pc1_loading, N, loading),top_n(pc1_loading, -N, loading))
+#lets get the top and bottom 10
+pc1_loading <- transform(pc1_loading, token = factor(token, levels = unique(token)))
+pc1_loading
+
+# plot top tokens according to absolute loading values
+ggplot(pc1_loading, aes(token, loading)) + 
+  geom_bar(stat = "identity", fill = ifelse(pc1_loading$loading <= 0, "grey20", "grey70")) +
+  coord_flip() + 
+  xlab("Tokens") + ylab("Tokens with Top Loadings on PC1") +
+  scale_colour_grey(start = .3, end = .7) +
+  theme(panel.background = element_blank())
+```
+
+Answer: The first principal component seems messy and hard to interpret.
+
+
+## Q6b LSA (Latent Semantic Model)
+
+```{r echo=TRUE}
+politics_mat_lsa <- convert(politics_dfm, to = "lsa") 
+politics_mat_lsa <- lw_logtf(politics_mat_lsa) * gw_idf(politics_mat_lsa) # local - global weighting (akin to TFIDF)
+politics_lsa <- lsa(politics_mat_lsa)
+politics_lsa_mat <- as.textmatrix(politics_lsa)
+
+obamacare <- associate(politics_lsa_mat, "obamacare", "cosine", threshold = .3)
+immigration <- associate(politics_lsa_mat, "immigration", "cosine", threshold = .3)
+
+cat("5 Nearest tokens for obamacare are:",names(obamacare)[1:5])
+cat("5 Nearest tokens for immigation are:",names(immigration[1:5]))
+```
+Answer: 
+- 5 Nearest tokens for obamacare are: largely dropped cause premiums plummets
+- 5 Nearest tokens for immigation are: enforcement customs retire blasts focus
+Some of these nearest words make sense. For obamacare: we can interpret the words as obamacare cause premiums to largely drop/plumnet, which is intuitively plausible to appear together, but these are all common words. For immigration: enforcement, customs, blasts intuitively make sense. 
+
+## Q6c glove embeddings
+
+```{r echo=TRUE}
+
+pretrained <- readRDS("glove.rds")
+# function to compute nearest neighbors
+nearest_neighbors <- function(cue, embeds, N = 5, norm = "l2"){
+  cos_sim <- sim2(x = embeds, y = embeds[cue, , drop = FALSE], method = "cosine", norm = norm)
+  nn <- cos_sim <- cos_sim[order(-cos_sim),]
+  return(names(nn)[2:(N + 1)])  # cue is always the nearest neighbor hence dropped
+}
+
+cat("Nearest_neighbors for obamacare are:",nearest_neighbors("obamacare", pretrained, N = 10, norm = "l2"))
+cat("Nearest_neighbors for immigration are:",nearest_neighbors("immigration", pretrained, N = 10, norm = "l2"))
+```
+Answer: Nearest neighbors obtained by glove methods seems much more closely related to both terms compared to lsa above. Especially ppaca for obamacare, it's highly and specifically related to the obamacare program.
