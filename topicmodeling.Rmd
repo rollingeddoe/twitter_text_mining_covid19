@@ -1,6 +1,5 @@
 ---
-title: "Text as Data HW 3"
-author: "Yutong Chen, yc4127"
+
 date: "4/21/2020"
 output:
   html_document:
